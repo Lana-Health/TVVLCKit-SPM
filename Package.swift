@@ -16,7 +16,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "TVVLCKitTarget",
-            url: "https://api.github.com/repos/Lana-Health/TVVLCKit-SPM/releases/assets/RA_kwDORJKxKc4U7S5f.zip",
+            url: "https://github.com/Lana-Health/TVVLCKit-SPM/releases/download/v3.6.0/TVVLCKit.xcframework.zip",
             checksum: "f232cab7fd30d3bf05f0b8ef1e917753d7f0d6d54ea25adf39d4eb1b149d4d49"
         )
     ]
