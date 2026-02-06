@@ -13,7 +13,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,147 +23,177 @@ jobs:
       - name: Check for latest VLCKit release
         id: check-version
         run: |
-          # Fetch the latest release info from VLCKit GitLab
-          echo "Checking for latest VLCKit release..."
-
-          # Get latest release tag from GitLab API
-          LATEST_RELEASE=$(curl -s "https://code.videolan.org/api/v4/projects/videolan%2FVLCKit/releases" | jq -r '.[0].tag_name')
-          echo "Latest VLCKit version: $LATEST_RELEASE"
-
+          echo "Checking for latest TVVLCKit release..."
+          
+          # Get latest release info from VideoLAN's CocoaPods feed
+          # Parse the download page to find the latest TVVLCKit version
+          LATEST_VERSION=$(curl -s "https://download.videolan.org/cocoapods/prod/" | \
+            grep -o 'TVVLCKit-[0-9.]*-[a-f0-9]*-[a-f0-9]*.tar.xz' | \
+            sed 's/TVVLCKit-//' | \
+            sed 's/-.*//' | \
+            sort -V | \
+            tail -1)
+          
+          echo "Latest version found: $LATEST_VERSION"
+          
           # Get current version from Package.swift
-          CURRENT_VERSION=$(grep -o 'download/v[0-9.]*' Package.swift | head -1 | sed 's/download\/v//')
+          CURRENT_VERSION=$(grep -o 'download/v[0-9.]*' Package.swift | head -1 | sed 's/download\/v//' || echo "0.0.0")
           echo "Current version: $CURRENT_VERSION"
-
-          echo "latest_version=$LATEST_RELEASE" >> $GITHUB_OUTPUT
-          echo "current_version=v$CURRENT_VERSION" >> $GITHUB_OUTPUT
-
-          if [ "$LATEST_RELEASE" != "v$CURRENT_VERSION" ]; then
+          
+          # Find the full download URL for the latest version
+          DOWNLOAD_URL=$(curl -s "https://download.videolan.org/cocoapods/prod/" | \
+            grep -o "TVVLCKit-${LATEST_VERSION}-[a-f0-9]*-[a-f0-9]*.tar.xz" | \
+            head -1)
+          
+          echo "Download file: $DOWNLOAD_URL"
+          echo "Full URL: https://download.videolan.org/cocoapods/prod/$DOWNLOAD_URL"
+          
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "download_url=https://download.videolan.org/cocoapods/prod/$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          
+          if [ "$LATEST_VERSION" != "$CURRENT_VERSION" ]; then
             echo "update_available=true" >> $GITHUB_OUTPUT
-            echo "✅ Update available: $CURRENT_VERSION -> $LATEST_RELEASE"
+            echo "✅ Update available: $CURRENT_VERSION -> $LATEST_VERSION"
           else
             echo "update_available=false" >> $GITHUB_OUTPUT
             echo "✅ Already up to date"
           fi
 
-      - name: Download and prepare new framework
+      - name: Download and repackage framework
         if: steps.check-version.outputs.update_available == 'true'
-        id: download
+        id: package
         run: |
-          VERSION=${{ steps.check-version.outputs.latest_version }}
-          VERSION_NUM=${VERSION#v}
-
-          echo "Downloading TVVLCKit $VERSION..."
-
-          # Download the framework from VLCKit releases
-          # Note: Adjust this URL based on actual VLCKit release structure
-          DOWNLOAD_URL="https://code.videolan.org/videolan/VLCKit/-/jobs/artifacts/$VERSION/download?job=tvos"
-
-          # Alternative: If they provide direct framework downloads
-          # DOWNLOAD_URL="https://download.videolan.org/pub/cocoapods/prod/TVVLCKit-$VERSION_NUM.tar.xz"
-
-          mkdir -p temp_download
-          cd temp_download
-
-          # Download the artifact
-          curl -L -o framework.zip "$DOWNLOAD_URL" || {
-            echo "❌ Failed to download from primary URL"
-            # Fallback or alternative download method
-            exit 1
-          }
-
-          # Extract and locate TVVLCKit.xcframework
-          unzip -q framework.zip || tar -xf framework.zip
-
-          # Find the xcframework
-          FRAMEWORK_PATH=$(find . -name "TVVLCKit.xcframework" -type d | head -1)
-
-          if [ -z "$FRAMEWORK_PATH" ]; then
-            echo "❌ TVVLCKit.xcframework not found in download"
+          set -e
+          
+          VERSION="${{ steps.check-version.outputs.latest_version }}"
+          TVOS_URL="${{ steps.check-version.outputs.download_url }}"
+          
+          echo "Downloading TVVLCKit version $VERSION..."
+          echo "URL: $TVOS_URL"
+          
+          # Cleanup and setup
+          rm -rf .tmp/ || true
+          mkdir -p .tmp/
+          
+          # Download and extract
+          echo "Downloading TVVLCKit..."
+          curl -L -o .tmp/TVVLCKit.tar.xz "$TVOS_URL"
+          tar -xf .tmp/TVVLCKit.tar.xz -C .tmp/
+          
+          TVOS_LOCATION=".tmp/TVVLCKit-binary/TVVLCKit.xcframework"
+          
+          # Verify the framework exists
+          if [ ! -d "$TVOS_LOCATION" ]; then
+            echo "❌ TVVLCKit.xcframework not found at expected location"
+            ls -la .tmp/
             exit 1
           fi
-
-          # Create xcframework zip
-          cd $(dirname "$FRAMEWORK_PATH")
-          zip -r TVVLCKit.xcframework.zip TVVLCKit.xcframework
-
-          # Calculate checksum
-          CHECKSUM=$(swift package compute-checksum TVVLCKit.xcframework.zip)
+          
+          # Package tvOS slices (Simulator + Device)
+          echo "Creating TVVLCKit.xcframework..."
+          xcodebuild -create-xcframework \
+              -framework "$TVOS_LOCATION/tvos-arm64_x86_64-simulator/TVVLCKit.framework" \
+              -debug-symbols "${PWD}/$TVOS_LOCATION/tvos-arm64_x86_64-simulator/dSYMs/TVVLCKit.framework.dSYM" \
+              -framework "$TVOS_LOCATION/tvos-arm64/TVVLCKit.framework" \
+              -debug-symbols "${PWD}/$TVOS_LOCATION/tvos-arm64/dSYMs/TVVLCKit.framework.dSYM" \
+              -output .tmp/TVVLCKit.xcframework
+          
+          # Compress the result
+          echo "Compressing framework..."
+          ditto -c -k --sequesterRsrc --keepParent ".tmp/TVVLCKit.xcframework" ".tmp/TVVLCKit.xcframework.zip"
+          
+          # Generate checksum
+          CHECKSUM=$(shasum -a 256 ".tmp/TVVLCKit.xcframework.zip" | awk '{ print $1 }')
           echo "Checksum: $CHECKSUM"
-
+          
+          # Copy license
+          if [ -f ".tmp/TVVLCKit-binary/COPYING.txt" ]; then
+            cp -f .tmp/TVVLCKit-binary/COPYING.txt ./LICENSE
+            echo "✅ License file updated"
+          fi
+          
           echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
-          echo "framework_path=$(pwd)/TVVLCKit.xcframework.zip" >> $GITHUB_OUTPUT
-          echo "version_num=$VERSION_NUM" >> $GITHUB_OUTPUT
+          echo "framework_path=${PWD}/.tmp/TVVLCKit.xcframework.zip" >> $GITHUB_OUTPUT
+          echo "✅ Framework packaged successfully"
 
       - name: Create GitHub Release
         if: steps.check-version.outputs.update_available == 'true'
         id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ steps.check-version.outputs.latest_version }}
-          release_name: TVVLCKit ${{ steps.check-version.outputs.latest_version }}
+          tag_name: v${{ steps.check-version.outputs.latest_version }}
+          name: TVVLCKit v${{ steps.check-version.outputs.latest_version }}
           body: |
             Automated update of TVVLCKit framework to version ${{ steps.check-version.outputs.latest_version }}
-
-            Source: https://code.videolan.org/videolan/VLCKit
-
+            
+            **Source:** https://code.videolan.org/videolan/VLCKit
+            **Download:** ${{ steps.check-version.outputs.download_url }}
+            
             **Changes:**
-            - Updated TVVLCKit from ${{ steps.check-version.outputs.current_version }} to ${{ steps.check-version.outputs.latest_version }}
+            - Updated TVVLCKit from v${{ steps.check-version.outputs.current_version }} to v${{ steps.check-version.outputs.latest_version }}
+            - Updated Package.swift with new checksum
+            - Updated LICENSE file
+            
+            **Checksum:** `${{ steps.package.outputs.checksum }}`
+          files: .tmp/TVVLCKit.xcframework.zip
           draft: false
           prerelease: false
-
-      - name: Upload Release Asset
-        if: steps.check-version.outputs.update_available == 'true'
-        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ steps.download.outputs.framework_path }}
-          asset_name: TVVLCKit.xcframework.zip
-          asset_content_type: application/zip
 
       - name: Update Package.swift
         if: steps.check-version.outputs.update_available == 'true'
         run: |
-          VERSION=${{ steps.check-version.outputs.latest_version }}
-          CHECKSUM=${{ steps.download.outputs.checksum }}
-
-          # Update Package.swift with new version and checksum
-          sed -i '' "s|download/v[0-9.]*|download/$VERSION|g" Package.swift
+          VERSION="${{ steps.check-version.outputs.latest_version }}"
+          CHECKSUM="${{ steps.package.outputs.checksum }}"
+          
+          echo "Updating Package.swift..."
+          
+          # Update the URL and checksum in Package.swift
+          sed -i '' "s|download/v[0-9.]*|download/v$VERSION|g" Package.swift
           sed -i '' "s|checksum: \"[^\"]*\"|checksum: \"$CHECKSUM\"|g" Package.swift
-
+          
           echo "✅ Updated Package.swift"
+          echo "--- Package.swift content ---"
           cat Package.swift
+          echo "--- End of Package.swift ---"
 
       - name: Create Pull Request
         if: steps.check-version.outputs.update_available == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Update TVVLCKit to ${{ steps.check-version.outputs.latest_version }}"
-          title: "🔄 Update TVVLCKit to ${{ steps.check-version.outputs.latest_version }}"
+          commit-message: "Update TVVLCKit to v${{ steps.check-version.outputs.latest_version }}"
+          title: "🔄 Update TVVLCKit to v${{ steps.check-version.outputs.latest_version }}"
           body: |
             ## 🎉 New TVVLCKit Version Available
-
-            This PR updates the TVVLCKit framework from **${{ steps.check-version.outputs.current_version }}** to **${{ steps.check-version.outputs.latest_version }}**.
-
+            
+            This PR updates the TVVLCKit framework from **v${{ steps.check-version.outputs.current_version }}** to **v${{ steps.check-version.outputs.latest_version }}**.
+            
             ### Changes
-            - ✅ Downloaded latest TVVLCKit framework from VLCKit
-            - ✅ Created GitHub release with framework binary
+            - ✅ Downloaded TVVLCKit framework from VideoLAN
+            - ✅ Repackaged framework with debug symbols
+            - ✅ Created GitHub release [v${{ steps.check-version.outputs.latest_version }}](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.check-version.outputs.latest_version }})
             - ✅ Updated `Package.swift` with new version and checksum
-
-            ### Source
-            - [VLCKit Repository](https://code.videolan.org/videolan/VLCKit)
-            - [Release ${{ steps.check-version.outputs.latest_version }}](https://code.videolan.org/videolan/VLCKit/-/releases/${{ steps.check-version.outputs.latest_version }})
-
+            - ✅ Updated `LICENSE` file
+            
+            ### Details
+            - **Source URL:** ${{ steps.check-version.outputs.download_url }}
+            - **Checksum:** `${{ steps.package.outputs.checksum }}`
+            
             ### Testing
             Please test this update in your projects before merging.
-
+            
+            ```swift
+            dependencies: [
+                .package(url: "https://github.com/Lana-Health/TVVLCKit-SPM.git", from: "${{ steps.check-version.outputs.latest_version }}")
+            ]
+            ```
+            
             ---
             🤖 This PR was automatically created by the Update TVVLCKit workflow.
-          branch: update-tvvlckit-${{ steps.check-version.outputs.latest_version }}
+          branch: update-tvvlckit-v${{ steps.check-version.outputs.latest_version }}
           delete-branch: true
           labels: |
             dependencies
@@ -175,19 +205,28 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.create({
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: '🔔 TVVLCKit Updated to ${{ steps.check-version.outputs.latest_version }}',
+              title: '🔔 TVVLCKit Updated to v${{ steps.check-version.outputs.latest_version }}',
               body: `A new version of TVVLCKit is available and has been automatically updated.
-
-              **Previous version:** ${{ steps.check-version.outputs.current_version }}
-              **New version:** ${{ steps.check-version.outputs.latest_version }}
-
-              A pull request has been created with the update. Please review and merge when ready.
-
+              
+              **Previous version:** v${{ steps.check-version.outputs.current_version }}
+              **New version:** v${{ steps.check-version.outputs.latest_version }}
+              
+              **What was done:**
+              - Downloaded and repackaged the framework
+              - Created release: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.check-version.outputs.latest_version }}
+              - Updated Package.swift with new checksum
+              - Created pull request for review
+              
+              **Source:** ${{ steps.check-version.outputs.download_url }}
+              
+              Please review and merge the pull request when ready.
+              
               🤖 Automated notification from Update TVVLCKit workflow.`,
-              labels: ['notification', 'update-available']
+              labels: ['notification', 'update-available'],
+              assignees: ['apoorva-lana']
             });
 
       - name: Comment on failure
@@ -195,16 +234,18 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.create({
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: '❌ TVVLCKit Update Failed',
-              body: `The automated TVVLCKit update workflow failed.
-
-              **Attempted version:** ${{ steps.check-version.outputs.latest_version }}
-
-              Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-
+              body: `The automated TVVLCKit update workflow failed while trying to update to v${{ steps.check-version.outputs.latest_version }}.
+              
+              **Attempted version:** v${{ steps.check-version.outputs.latest_version }}
+              **Download URL:** ${{ steps.check-version.outputs.download_url }}
+              
+              Please check the [workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+              
               🤖 Automated notification from Update TVVLCKit workflow.`,
-              labels: ['notification', 'error']
+              labels: ['notification', 'error'],
+              assignees: ['apoorva-lana']
             });
