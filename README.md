@@ -53,8 +53,8 @@ set -e
 rm -rf .tmp/ || true
 mkdir -p .tmp/
 
-TAG_VERSION="3.6.0"
-TVOS_URL="https://download.videolan.org/cocoapods/prod/TVVLCKit-3.6.0-c73b779f-dd8bfdba.tar.xz"
+TAG_VERSION="3.7.2"
+TVOS_URL="https://download.videolan.org/cocoapods/prod/TVVLCKit-3.7.2-c73b779f-dd8bfdba.tar.xz"
 
 echo "Downloading TVVLCKit..."
 curl -L -o .tmp/TVVLCKit.tar.xz $TVOS_URL
@@ -85,7 +85,7 @@ echo "Done! Upload .tmp/TVVLCKit.xcframework.zip to GitHub Release v$TAG_VERSION
 
 ## Current Version
 
-- **TVVLCKit:** v3.6.0
+- **TVVLCKit:** v3.7.2
 - **Source:** [VLCKit](https://code.videolan.org/videolan/VLCKit)
 - **Download:** [VideoLAN CocoaPods](https://download.videolan.org/cocoapods/prod/)
 - **Platform:** tvOS 13.0+
