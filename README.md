@@ -37,29 +37,6 @@ The workflow is already configured, but ensure these settings are enabled:
    - Go to Actions → "Update TVVLCKit Framework"
    - Click "Run workflow" to manually check for updates
 
-## Usage
-
-Add this package to your project's dependencies in `Package.swift`:
-
-```swift
-dependencies: [
-    .package(url: "https://github.com/Lana-Health/TVVLCKit-SPM.git", from: "3.6.0")
-]
-```
-
-Then add it to your target:
-
-```swift
-targets: [
-    .target(
-        name: "YourTarget",
-        dependencies: [
-            .product(name: "TVVLCKit", package: "TVVLCKit-SPM")
-        ]
-    )
-]
-```
-
 ## Manual Update Process
 
 If you need to manually update the framework:
