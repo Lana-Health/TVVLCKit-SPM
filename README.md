@@ -4,32 +4,38 @@ SPM wrapper for TVVLCKit binary distribution.
 
 This repository contains the TVVLCKit framework for tvOS, sourced from [VLCKit](https://code.videolan.org/videolan/VLCKit).
 
+## How It Works
+
+This repository does NOT store the framework binaries directly. Instead:
+
+1. The framework is downloaded from VideoLAN's CocoaPods repository
+2. It's repackaged using `xcodebuild -create-xcframework` with debug symbols
+3. The repackaged framework is uploaded to GitHub Releases
+4. `Package.swift` references the GitHub Release URL
+
 ## Automated Updates
 
-This repository includes a GitHub Actions workflow that automatically:
-- Checks daily for new TVVLCKit releases from the VLCKit source
-- Downloads and packages the new framework
-- Creates a GitHub release with the framework binary
-- Updates Package.swift with the new version and checksum
-- Creates a pull request for review
-- Sends notifications when updates are available
+A GitHub Actions workflow automatically:
+- ✅ Checks daily for new TVVLCKit releases from VideoLAN
+- ✅ Downloads and repackages the framework with debug symbols
+- ✅ Creates a GitHub release with the repackaged framework
+- ✅ Updates Package.swift with the new version and checksum
+- ✅ Updates the LICENSE file
+- ✅ Creates a pull request for review
+- ✅ Sends notifications when updates are available
 
 ### Setup
 
-To enable the automated workflow:
+The workflow is already configured, but ensure these settings are enabled:
 
-1. **Enable workflow permissions:**
-   - Go to repository Settings → Actions → General
+1. **Repository permissions:**
+   - Go to Settings → Actions → General
    - Under "Workflow permissions", select "Read and write permissions"
    - Check "Allow GitHub Actions to create and approve pull requests"
 
 2. **Manual trigger:**
    - Go to Actions → "Update TVVLCKit Framework"
    - Click "Run workflow" to manually check for updates
-
-### Customization
-
-The VLCKit download URL may need adjustment based on their release structure. Check the workflow file at `.github/workflows/update-tvvlckit.yml` and update the `DOWNLOAD_URL` in the "Download and prepare new framework" step if needed.
 
 ## Usage
 
@@ -54,12 +60,59 @@ targets: [
 ]
 ```
 
+## Manual Update Process
+
+If you need to manually update the framework:
+
+1. Update `TAG_VERSION` and `TVOS_URL` in the script below
+2. Run the script on macOS with Xcode installed
+3. Create a GitHub release with the generated `TVVLCKit.xcframework.zip`
+4. Commit the updated `Package.swift` and `LICENSE`
+
+```bash
+#!/bin/sh
+set -e
+
+rm -rf .tmp/ || true
+mkdir -p .tmp/
+
+TAG_VERSION="3.6.0"
+TVOS_URL="https://download.videolan.org/cocoapods/prod/TVVLCKit-3.6.0-c73b779f-dd8bfdba.tar.xz"
+
+echo "Downloading TVVLCKit..."
+curl -L -o .tmp/TVVLCKit.tar.xz $TVOS_URL
+tar -xf .tmp/TVVLCKit.tar.xz -C .tmp/
+
+TVOS_LOCATION=".tmp/TVVLCKit-binary/TVVLCKit.xcframework"
+
+echo "Creating TVVLCKit.xcframework..."
+xcodebuild -create-xcframework \
+    -framework "$TVOS_LOCATION/tvos-arm64_x86_64-simulator/TVVLCKit.framework" \
+    -debug-symbols "${PWD}/$TVOS_LOCATION/tvos-arm64_x86_64-simulator/dSYMs/TVVLCKit.framework.dSYM" \
+    -framework "$TVOS_LOCATION/tvos-arm64/TVVLCKit.framework" \
+    -debug-symbols "${PWD}/$TVOS_LOCATION/tvos-arm64/dSYMs/TVVLCKit.framework.dSYM" \
+    -output .tmp/TVVLCKit.xcframework
+
+ditto -c -k --sequesterRsrc --keepParent ".tmp/TVVLCKit.xcframework" ".tmp/TVVLCKit.xcframework.zip"
+
+PACKAGE_HASH=$(shasum -a 256 ".tmp/TVVLCKit.xcframework.zip" | awk '{ print $1 }')
+
+echo "Checksum: $PACKAGE_HASH"
+sed -i '' "s|download/v[0-9.]*|download/v$TAG_VERSION|g" Package.swift
+sed -i '' "s|checksum: \"[^\"]*\"|checksum: \"$PACKAGE_HASH\"|g" Package.swift
+
+cp -f .tmp/TVVLCKit-binary/COPYING.txt ./LICENSE
+
+echo "Done! Upload .tmp/TVVLCKit.xcframework.zip to GitHub Release v$TAG_VERSION"
+```
+
 ## Current Version
 
 - **TVVLCKit:** v3.6.0
 - **Source:** [VLCKit](https://code.videolan.org/videolan/VLCKit)
+- **Download:** [VideoLAN CocoaPods](https://download.videolan.org/cocoapods/prod/)
 - **Platform:** tvOS 13.0+
 
 ## License
 
-This is a wrapper repository. Please refer to the [VLCKit repository](https://code.videolan.org/videolan/VLCKit) for licensing information about the VLC framework.
+This is a wrapper repository. The VLC framework is licensed under LGPL. See [LICENSE](LICENSE) file for details.
